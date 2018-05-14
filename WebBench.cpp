@@ -5,11 +5,16 @@
 #include <iostream>
 #include <unistd.h>
 #include <getopt.h>
+#include <signal.h>
 #include <string.h>
+#include <sys/wait.h>
+#include "Socket.h"
 
 using namespace std;
 
 void Get_request(const char*);
+int Get_clients();
+void Get_socket();
 
 struct option long_option[] = {
 	{"time",2, NULL,'t'},
@@ -31,6 +36,19 @@ void help_information() {
 char request[1024];
 char Hostname[1024];
 int Hostport = 80;
+int Time = 60;				//设置默认执行时间和访问客户端数
+int clients = 1;
+int time_flag = 0;
+
+//请求记录
+int Succeed = 0;
+int Failed = 0;
+int bytes = 0;
+
+void Alarm(int signal) {
+	//fprintf(stdout, "Time out");
+	time_flag = 1;
+}
 
 int main(int argc,char *argv[])
 {
@@ -41,8 +59,6 @@ int main(int argc,char *argv[])
 
 	int opt;
 	int opt_index;
-	int Time = 60;				//设置默认执行时间和访问客户端数
-	int clients = 1;
 
 	while ((opt = getopt_long(argc, argv, "t::c::h", long_option, &opt_index)) != -1) {
 		switch (opt) {
@@ -50,24 +66,27 @@ int main(int argc,char *argv[])
 			if (optarg != NULL)
 				Time = atoi(optarg);
 			break;
-		case('c'):	if(optarg!=NULL) clients = atoi(optarg); break;
+		case('c'):	if (optarg != NULL) clients = atoi(optarg); break;
 		case('h'):
 		case('?'):	help_information();break;
 		}
 	}
-	//fprintf(stdout, "Time: %d\nclients: %d\n", Time, clients);
+	fprintf(stdout, "Time: %d\nclients: %d\n", Time, clients);
 	if (optind == argc) {		//如果有URL，则optind应该比argc大1
 		fprintf(stderr, "ERROR: URL is needed for the WebBench\n");
 		return 1;
 	}
 	Get_request(argv[optind]);
 
+	return Get_clients();
+	//fprintf(stdout,"%d %d\n",Succeed,Failed);
+
     return 0;
 }
 
 void Get_request(const char* argv) {
 	//目前暂时只支持GET方式
-	strcpy(request, "GET");
+	strcpy(request, "GET ");
 
 	//检测URL是否合法
 	if (strncasecmp(argv, "http://", 7) != 0) {
@@ -83,7 +102,6 @@ void Get_request(const char* argv) {
 		exit(1);
 	}
 
-	//目前暂时不支持代理模式，因此仅需获取URL中的path路径
 	int index_path = strchr(argv + 7, '/') - argv;			//首先找到://之后的第一个'/'的位置
 	//判断URL中是否包含端口号
 	if (strchr(argv + 7, ':') != NULL) {
@@ -92,5 +110,119 @@ void Get_request(const char* argv) {
 		strncpy(hostport, argv + index + 1, index_path-index-1);
 		Hostport = atoi(hostport);
 		fprintf(stdout, "%d\n", Hostport);
+
+		//获取主机名
+		strncpy(Hostname, argv + 7, index - 7);
+		fprintf(stdout, "%s\n", Hostname);
 	}
+	else {
+		//获取主机名
+		strncpy(Hostname, argv + 7, index_path - 7);
+		fprintf(stdout, "%s\n", Hostname);
+	}
+	
+	//目前暂时不支持代理模式，因此仅需获取URL中的path路径
+	strcat(request, argv + index_path);
+	strcat(request, " ");
+
+	//目前只支持HTTP1.1
+	strcat(request, "HTTP/1.1");
+	fprintf(stdout, "%s\n", request);
+}
+
+int Get_clients() {
+	int fd[2];
+	pid_t pid;
+
+	if (pipe(fd) != 0) {
+		fprintf(stderr, "Error: pipe failed\n");
+		return 2;
+	}
+
+	for (int i = 0; i < clients; ++i) {
+		pid = fork();
+		if (pid == 0)
+			break;
+		if (pid < 0) {
+			fprintf(stderr, "Error: fork failed\n");
+			return 3;
+		}
+	}
+	if (pid == 0) {		//子进程
+		Get_socket();
+		return 0;
+	}
+	else if (pid != 0) {
+		//waitpid(-1);
+		return 0;
+	}
+}
+
+void Get_socket() {
+	char response[1024];
+	struct sigaction sa;
+	sa.sa_handler = Alarm;
+	sa.sa_flags = 0;
+	if (sigaction(SIGALRM, &sa,NULL)) {		//sigaction返回-1表示处理失败
+		fprintf(stderr, "Error: Signal processing failed\n");
+		exit(1);
+	}
+	//设定定时器
+	alarm(Time);
+
+	//开始对指定URL发起请求，并记录成功和失败次数
+	while (1) {
+		if (time_flag) {			//首先判断是否超时
+			fprintf(stdout, "%d %d %d\n", Succeed, Failed, bytes);
+			return;
+		}
+
+		//未超时对指定URL发起连接
+		int sockfd;
+		sockfd = Socket(Hostname, Hostport);
+		if (sockfd < 0) {			//连接失败
+			++Failed;
+			continue;
+		}
+		//接着写入HTTP请求
+		int flag = write(sockfd, request, sizeof(request));
+		if (flag < 0) {
+			++Failed;
+			close(sockfd);
+			continue;
+		}
+		
+		//读入响应
+		int temp_flag = 0;						//读取标志量，判断是否读取失败需从头再来
+		while (1) {
+			if (time_flag) {
+				break;
+			}
+			int temp_size = read(sockfd, response, 1024);
+			if (temp_size < 0) {				//读取失败
+				++Failed;
+				close(sockfd);
+				fprintf(stdout, "None\n");
+				temp_flag = 1;					//设置标志量
+				break;
+			}
+			else if (temp_size == 0) {			//读取完毕
+				fprintf(stdout, "ZERO\n");
+				break;
+			}
+			else {								//记录读取的字节数
+				bytes += temp_size;
+				fprintf(stdout, "bytes\n");
+			}
+		}
+		if (temp_flag == 1)
+			continue;
+		//关闭连接
+		if (close(sockfd)) {
+			++Failed;
+			continue;
+		}
+		++Succeed;
+	}
+
 }
