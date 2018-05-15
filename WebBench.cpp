@@ -1,5 +1,7 @@
 // WebBench.cpp : 定义控制台应用程序的入口点。
 //
+/*注意不同版本下请求头的要求
+*/
 
 //#include "stdafx.h"
 #include <iostream>
@@ -109,16 +111,16 @@ void Get_request(const char* argv) {
 		char hostport[1024];
 		strncpy(hostport, argv + index + 1, index_path-index-1);
 		Hostport = atoi(hostport);
-		fprintf(stdout, "%d\n", Hostport);
+		fprintf(stdout, "Port: %d\n", Hostport);
 
 		//获取主机名
 		strncpy(Hostname, argv + 7, index - 7);
-		fprintf(stdout, "%s\n", Hostname);
+		fprintf(stdout, "Hostname: %s\n", Hostname);
 	}
 	else {
 		//获取主机名
 		strncpy(Hostname, argv + 7, index_path - 7);
-		fprintf(stdout, "%s\n", Hostname);
+		fprintf(stdout, "Hostname: %s\n", Hostname);
 	}
 	
 	//目前暂时不支持代理模式，因此仅需获取URL中的path路径
@@ -126,8 +128,16 @@ void Get_request(const char* argv) {
 	strcat(request, " ");
 
 	//目前只支持HTTP1.1
-	strcat(request, "HTTP/1.1");
-	fprintf(stdout, "%s\n", request);
+	strcat(request, "HTTP/1.1\r\n");
+	//strcat(request, "User-Agent: WebBench 1.0\r\n");
+	strcat(request, "Host: ");			//HTTP1.1必须指定Host字段
+	strcat(request, Hostname);
+	strcat(request, "\r\n");
+	strcat(request, "Connection: close\r\n");
+	strcat(request, "\r\n");			//注意HTTP请求的格式，请求头和请求数据间有一个空行，
+										//非常重要一定不能遗漏，缺失会造成问题。
+
+	fprintf(stdout, "request: %s\n", request);
 }
 
 int Get_clients() {
@@ -169,7 +179,6 @@ void Get_socket() {
 	}
 	//设定定时器
 	alarm(Time);
-
 	//开始对指定URL发起请求，并记录成功和失败次数
 	while (1) {
 		if (time_flag) {			//首先判断是否超时
@@ -185,7 +194,7 @@ void Get_socket() {
 			continue;
 		}
 		//接着写入HTTP请求
-		int flag = write(sockfd, request, sizeof(request));
+		int flag = write(sockfd, request, strlen(request));
 		if (flag < 0) {
 			++Failed;
 			close(sockfd);
@@ -202,19 +211,17 @@ void Get_socket() {
 			if (temp_size < 0) {				//读取失败
 				++Failed;
 				close(sockfd);
-				fprintf(stdout, "None\n");
 				temp_flag = 1;					//设置标志量
 				break;
 			}
 			else if (temp_size == 0) {			//读取完毕
-				fprintf(stdout, "ZERO\n");
 				break;
 			}
 			else {								//记录读取的字节数
 				bytes += temp_size;
-				fprintf(stdout, "bytes\n");
 			}
 		}
+	
 		if (temp_flag == 1)
 			continue;
 		//关闭连接
