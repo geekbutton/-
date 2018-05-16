@@ -129,7 +129,7 @@ void Get_request(const char* argv) {
 
 	//目前只支持HTTP1.1
 	strcat(request, "HTTP/1.1\r\n");
-	//strcat(request, "User-Agent: WebBench 1.0\r\n");
+	strcat(request, "User-Agent: WebBench 1.0\r\n");
 	strcat(request, "Host: ");			//HTTP1.1必须指定Host字段
 	strcat(request, Hostname);
 	strcat(request, "\r\n");
@@ -143,6 +143,7 @@ void Get_request(const char* argv) {
 int Get_clients() {
 	int fd[2];
 	pid_t pid;
+	FILE* f;
 
 	if (pipe(fd) != 0) {
 		fprintf(stderr, "Error: pipe failed\n");
@@ -160,10 +161,34 @@ int Get_clients() {
 	}
 	if (pid == 0) {		//子进程
 		Get_socket();
+		f = fdopen(fd[1], "w");
+		if (f == NULL) {
+			fprintf(stderr, "Error: read form pipe failed");
+			return 1;
+		}
+		fprintf(f, "%d %d %d\n", Succeed, Failed, bytes);
+		fclose(f);
 		return 0;
 	}
 	else if (pid != 0) {
-		//waitpid(-1);
+		f = fdopen(fd[0], "r");
+		if (f == NULL) {
+			fprintf(stderr, "Error: write to pipe failed");
+			return 1;
+		}
+		int temp_succeed = 0, temp_failed = 0, temp_bytes = 0;
+		while (clients) {
+			if (fscanf(f, "%d %d %d", &temp_succeed, &temp_failed, &temp_bytes) < 3) {
+				fprintf(stderr, "Error: some data is lossed\n");
+				break;
+			}
+			Succeed += temp_succeed;
+			Failed += temp_failed;
+			bytes += temp_bytes;
+			--clients;
+		}
+		fprintf(stdout, "Requests: %d succeed, %d failed\nSpeed: %d requests/min, %d bytes/sec\n", \
+			Succeed, Failed, (int)((Succeed + Failed) / ((float)Time / 60)), (bytes) / Time);
 		return 0;
 	}
 }
