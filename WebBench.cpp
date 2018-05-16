@@ -73,17 +73,14 @@ int main(int argc,char *argv[])
 		case('?'):	help_information();break;
 		}
 	}
-	fprintf(stdout, "Time: %d\nclients: %d\n", Time, clients);
-	if (optind == argc) {		//如果有URL，则optind应该比argc大1
+	fprintf(stdout, "Time: %d sec clients: %d\n", Time, clients);
+	if (optind == argc) {		//如果有URL，则optind应该比argc小1，optind代表要处理的下一个参数的索引
 		fprintf(stderr, "ERROR: URL is needed for the WebBench\n");
 		return 1;
 	}
-	Get_request(argv[optind]);
+	Get_request(argv[optind]);		//获取请求部分
 
-	return Get_clients();
-	//fprintf(stdout,"%d %d\n",Succeed,Failed);
-
-    return 0;
+	return Get_clients();			//建立客户端，发起连接
 }
 
 void Get_request(const char* argv) {
@@ -133,11 +130,11 @@ void Get_request(const char* argv) {
 	strcat(request, "Host: ");			//HTTP1.1必须指定Host字段
 	strcat(request, Hostname);
 	strcat(request, "\r\n");
-	strcat(request, "Connection: close\r\n");
+	//strcat(request, "Connection: close\r\n");
 	strcat(request, "\r\n");			//注意HTTP请求的格式，请求头和请求数据间有一个空行，
 										//非常重要一定不能遗漏，缺失会造成问题。
 
-	fprintf(stdout, "request: %s\n", request);
+	fprintf(stdout, "request: %s", request);
 }
 
 int Get_clients() {
@@ -156,15 +153,15 @@ int Get_clients() {
 			break;
 		if (pid < 0) {
 			fprintf(stderr, "Error: fork failed\n");
-			return 3;
+			return 2;
 		}
 	}
 	if (pid == 0) {		//子进程
-		Get_socket();
+		Get_socket();			//发起连接
 		f = fdopen(fd[1], "w");
 		if (f == NULL) {
 			fprintf(stderr, "Error: read form pipe failed");
-			return 1;
+			return 2;
 		}
 		fprintf(f, "%d %d %d\n", Succeed, Failed, bytes);
 		fclose(f);
@@ -174,7 +171,7 @@ int Get_clients() {
 		f = fdopen(fd[0], "r");
 		if (f == NULL) {
 			fprintf(stderr, "Error: write to pipe failed");
-			return 1;
+			return 2;
 		}
 		int temp_succeed = 0, temp_failed = 0, temp_bytes = 0;
 		while (clients) {
@@ -187,6 +184,7 @@ int Get_clients() {
 			bytes += temp_bytes;
 			--clients;
 		}
+		fclose(f);
 		fprintf(stdout, "Requests: %d succeed, %d failed\nSpeed: %d requests/min, %d bytes/sec\n", \
 			Succeed, Failed, (int)((Succeed + Failed) / ((float)Time / 60)), (bytes) / Time);
 		return 0;
@@ -200,7 +198,7 @@ void Get_socket() {
 	sa.sa_flags = 0;
 	if (sigaction(SIGALRM, &sa,NULL)) {		//sigaction返回-1表示处理失败
 		fprintf(stderr, "Error: Signal processing failed\n");
-		exit(1);
+		exit(2);
 	}
 	//设定定时器
 	alarm(Time);
