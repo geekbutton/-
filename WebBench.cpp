@@ -1,6 +1,10 @@
 // WebBench.cpp : 定义控制台应用程序的入口点。
 //
 /*注意不同版本下请求头的要求
+程序返回值：
+0：程序成功执行并返回
+1：输入参数或URL存在问题
+2：其他错误信息
 */
 
 //#include "stdafx.h"
@@ -35,12 +39,12 @@ void help_information() {
 	);
 }
 
-char request[1024];
-char Hostname[1024];
+char request[1024];			//HTTP请求(请求行，请求头，回车换行，请求数据)
+char Hostname[1024];		
 int Hostport = 80;
 int Time = 60;				//设置默认执行时间和访问客户端数
 int clients = 1;
-int time_flag = 0;
+int time_flag = 0;			//超时标志位
 
 //请求记录
 int Succeed = 0;
@@ -64,10 +68,7 @@ int main(int argc,char *argv[])
 
 	while ((opt = getopt_long(argc, argv, "t::c::h", long_option, &opt_index)) != -1) {
 		switch (opt) {
-		case('t'):
-			if (optarg != NULL)
-				Time = atoi(optarg);
-			break;
+		case('t'):	if (optarg != NULL)	Time = atoi(optarg); break;
 		case('c'):	if (optarg != NULL) clients = atoi(optarg); break;
 		case('h'):
 		case('?'):	help_information();break;
@@ -121,16 +122,18 @@ void Get_request(const char* argv) {
 	}
 	
 	//目前暂时不支持代理模式，因此仅需获取URL中的path路径
-	strcat(request, argv + index_path);
+	strcat(request, argv + index_path);			//请求行中的URL部分
 	strcat(request, " ");
 
 	//目前只支持HTTP1.1
-	strcat(request, "HTTP/1.1\r\n");
+	strcat(request, "HTTP/1.1\r\n");		//请求行中的协议版本(注意结尾应为回车换行符)
+	//指定请求头部
 	strcat(request, "User-Agent: WebBench 1.0\r\n");
 	strcat(request, "Host: ");			//HTTP1.1必须指定Host字段
 	strcat(request, Hostname);
 	strcat(request, "\r\n");
-	//strcat(request, "Connection: close\r\n");
+	//strcat(request, "Connection: close\r\n");	//区分长连接短连接
+
 	strcat(request, "\r\n");			//注意HTTP请求的格式，请求头和请求数据间有一个空行，
 										//非常重要一定不能遗漏，缺失会造成问题。
 
@@ -196,7 +199,7 @@ void Get_socket() {
 	struct sigaction sa;
 	sa.sa_handler = Alarm;
 	sa.sa_flags = 0;
-	if (sigaction(SIGALRM, &sa,NULL)) {		//sigaction返回-1表示处理失败
+	if (sigaction(SIGALRM, &sa, NULL)) {		//sigaction返回-1表示处理失败
 		fprintf(stderr, "Error: Signal processing failed\n");
 		exit(2);
 	}
