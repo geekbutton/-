@@ -22,9 +22,15 @@ void Get_request(const char*);
 int Get_clients();
 void Get_socket();
 
+int head_v = 0;			//request请求方法，0,1对应GET,HEAD
 struct option long_option[] = {
 	{"time",2, NULL,'t'},
 	{"client_nums",2,NULL,'c'},
+	{"http09",0,NULL,'0'},
+	{"http10",0,NULL,'1'},
+	{"http11",0,NULL,'2'},
+	{"GET",0,&head_v,0},
+	{"HEAD",0,&head_v,1},
 	{"help",0,NULL,'h'}
 };
 
@@ -32,9 +38,14 @@ void help_information() {
 	fprintf(stderr,
 		"Please check your parametes:\n"
 		"WebBench [option][URL]\n"
-		"-t | --time <sec>	Run each client <sec> seconds, default 60\n"
-		"-c | --client_nums <n>	Run n clients, default 1\n"
-		"-h | --help		Get help information"
+		"	-t | --time <sec>	Run each client <sec> seconds, default 60\n"
+		"	-c | --client_nums <n>	Run n clients, default 1\n"
+		"	-0 | --http09		HTTP-0.9 Version\n"
+		"	-1 | --http10		HTTP-1.0 Version\n"
+		"	-2 | --http11		HTTP-1.1 Version\n"
+		"	--GET			GET request\n"
+		"	--HEAD			HEAD request\n"	
+		"	-h | --help		Get help information"
 		"\n"
 	);
 }
@@ -44,6 +55,7 @@ char Hostname[1024];
 int Hostport = 80;
 int Time = 60;				//设置默认执行时间和访问客户端数
 int clients = 1;
+int http_v = 0;				//HTTP版本，0,1,2分别对应http0.9,http1.0,http1.1
 int time_flag = 0;			//超时标志位
 
 //请求记录
@@ -66,12 +78,14 @@ int main(int argc,char *argv[])
 	int opt;
 	int opt_index;
 
-	while ((opt = getopt_long(argc, argv, "t::c::h", long_option, &opt_index)) != -1) {
+	while ((opt = getopt_long(argc, argv, "t::c::012h", long_option, &opt_index)) != -1) {
 		switch (opt) {
 		case('t'):	if (optarg != NULL)	Time = atoi(optarg); break;
 		case('c'):	if (optarg != NULL) clients = atoi(optarg); break;
+		case('1'):	http_v = 1; break;
+		case('2'):	http_v = 2; break;
 		case('h'):
-		case('?'):	help_information();break;
+		case('?'):	help_information();return 0;
 		}
 	}
 	fprintf(stdout, "Time: %d sec clients: %d\n", Time, clients);
@@ -86,7 +100,10 @@ int main(int argc,char *argv[])
 
 void Get_request(const char* argv) {
 	//目前暂时只支持GET方式
-	strcpy(request, "GET ");
+	switch (head_v) {
+		case(0):	strcpy(request, "GET "); break;
+		case(1):	strcpy(request, "HEAD "); break;
+	}
 
 	//检测URL是否合法
 	if (strncasecmp(argv, "http://", 7) != 0) {
@@ -125,14 +142,28 @@ void Get_request(const char* argv) {
 	strcat(request, argv + index_path);			//请求行中的URL部分
 	strcat(request, " ");
 
-	//目前只支持HTTP1.1
-	strcat(request, "HTTP/1.1\r\n");		//请求行中的协议版本(注意结尾应为回车换行符)
+	//目前只支持HTTP0.9,HTTP1.1
+	//请求行中的协议版本(注意结尾应为回车换行符)
+	if (!http_v) {					//对应HTTP0.9，仅支持GET请求，无协议头
+		//注意http0.9不需要在请求行指定版本。
+		//Any request without a protocoll - version should be treaten as HTTP / 0.9.
+		strcat(request, "\r\n");
+		fprintf(stdout, "request: %s", request);
+		return;
+	}
+	if (http_v == 1)
+		strcat(request, "HTTP/1.0\r\n");
+	else if (http_v = 2)
+		strcat(request, "HTTP/1.1\r\n");
+
 	//指定请求头部
-	strcat(request, "User-Agent: WebBench 1.0\r\n");
+	strcat(request, "User-Agent: Mokaka's WebBench\r\n");
 	strcat(request, "Host: ");			//HTTP1.1必须指定Host字段
 	strcat(request, Hostname);
 	strcat(request, "\r\n");
-	//strcat(request, "Connection: close\r\n");	//区分长连接短连接
+	//HTTP1.1默认长连接，须关闭
+	if(http_v==2)
+		strcat(request, "Connection: close\r\n");	//区分长连接短连接
 
 	strcat(request, "\r\n");			//注意HTTP请求的格式，请求头和请求数据间有一个空行，
 										//非常重要一定不能遗漏，缺失会造成问题。
@@ -208,7 +239,7 @@ void Get_socket() {
 	//开始对指定URL发起请求，并记录成功和失败次数
 	while (1) {
 		if (time_flag) {			//首先判断是否超时
-			fprintf(stdout, "%d %d %d\n", Succeed, Failed, bytes);
+			//fprintf(stdout, "%d %d %d\n", Succeed, Failed, bytes);
 			return;
 		}
 
