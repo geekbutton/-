@@ -7,6 +7,29 @@
 2：其他错误信息
 */
 
+/*
+HTTP0.9: 仅支持GET，不支持请求头等
+HTTP1.0: 增加了GET,HEAD,POST
+HTTP1.1: 增加了OPTIONS,PUT,DELETE,TRACE,CONNECT
+*/
+
+/*常见状态码：
+1xx：指示信息--表示请求已接收，继续处理
+2xx：成功--表示请求已被成功接收、理解、接受
+3xx：重定向--要完成请求必须进行更进一步的操作
+4xx：客户端错误--请求有语法错误或请求无法实现
+5xx：服务器端错误--服务器未能实现合法的请求
+200 OK                        //客户端请求成功
+301 redirect				  //代表永久性转移
+302 redirect				  //代表暂时性转移
+400 Bad Request               //客户端请求有语法错误，不能被服务器所理解
+401 Unauthorized              //请求未经授权，这个状态代码必须和WWW-Authenticate报头域一起使用
+403 Forbidden                 //服务器收到请求，但是拒绝提供服务
+404 Not Found                 //请求资源不存在，eg：输入了错误的URL
+500 Internal Server Error     //服务器发生不可预期的错误
+503 Server Unavailable        //服务器当前不能处理客户端的请求，一段时间后可能恢复正常
+*/
+
 //#include "stdafx.h"
 #include <iostream>
 #include <unistd.h>
@@ -20,9 +43,9 @@ using namespace std;
 
 void Get_request(const char*);
 int Get_clients();
-void Get_socket();
+void Get_socket(char*);
 
-int head_v = 0;			//request请求方法，0,1对应GET,HEAD
+int head_v = 0;			//request请求方法，0,1,2,3对应GET,HEAD,OPTIONS,TRACE,默认为GET
 struct option long_option[] = {
 	{"time",2, NULL,'t'},
 	{"client_nums",2,NULL,'c'},
@@ -31,6 +54,9 @@ struct option long_option[] = {
 	{"http11",0,NULL,'2'},
 	{"GET",0,&head_v,0},
 	{"HEAD",0,&head_v,1},
+	{"OPTIONS",0,&head_v,2},
+	{"TRACE",0,&head_v,3},
+	{"proxy",1,NULL,'p'},
 	{"help",0,NULL,'h'}
 };
 
@@ -45,6 +71,9 @@ void help_information() {
 		"	-2 | --http11		HTTP-1.1 Version\n"
 		"	--GET			GET request\n"
 		"	--HEAD			HEAD request\n"	
+		"	--OPTIONS		OPTIONS request (only for HTTP1.1)\n"
+		"	--TRACE			TRACE request (only for HTTP1.1)\n"
+		"	-p | --proxy<name:port>Using proxy server\n"
 		"	-h | --help		Get help information"
 		"\n"
 	);
@@ -53,9 +82,11 @@ void help_information() {
 char request[1024];			//HTTP请求(请求行，请求头，回车换行，请求数据)
 char Hostname[1024];		
 int Hostport = 80;
+int proxy_flag = 0;
+char Proxyname[1024];
 int Time = 60;				//设置默认执行时间和访问客户端数
 int clients = 1;
-int http_v = 0;				//HTTP版本，0,1,2分别对应http0.9,http1.0,http1.1
+int http_v = 2;				//HTTP版本，0,1,2分别对应http0.9,http1.0,http1.1,默认为http1.1
 int time_flag = 0;			//超时标志位
 
 //请求记录
@@ -77,13 +108,25 @@ int main(int argc,char *argv[])
 
 	int opt;
 	int opt_index;
+	char* proxy_index = NULL;
 
-	while ((opt = getopt_long(argc, argv, "t::c::012h", long_option, &opt_index)) != -1) {
+	while ((opt = getopt_long(argc, argv, "t::c::012p:h", long_option, &opt_index)) != -1) {
 		switch (opt) {
 		case('t'):	if (optarg != NULL)	Time = atoi(optarg); break;
 		case('c'):	if (optarg != NULL) clients = atoi(optarg); break;
 		case('1'):	http_v = 1; break;
 		case('2'):	http_v = 2; break;
+		case('p'):	
+			proxy_index = strchr(optarg, ':');
+			if (proxy_index == NULL) {
+				fprintf(stdout, "Error: hostname and port is both needed for a proxy server.\n");
+				return 1;
+			}
+			strncpy(Proxyname,optarg,(proxy_index-optarg));
+			Hostport = atoi(proxy_index + 1);
+			proxy_flag = 1;
+			fprintf(stdout, "proxy: %s %d\n", Proxyname,Hostport);
+			break;
 		case('h'):
 		case('?'):	help_information();return 0;
 		}
@@ -99,11 +142,15 @@ int main(int argc,char *argv[])
 }
 
 void Get_request(const char* argv) {
-	//目前暂时只支持GET方式
+	//获取请求方法，同时处理请求方法与HTTP协议版本不匹配的问题
 	switch (head_v) {
 		case(0):	strcpy(request, "GET "); break;
-		case(1):	strcpy(request, "HEAD "); break;
+		case(1):	strcpy(request, "HEAD "); if (http_v == 0) http_v = 1; break;
+		case(2):	strcpy(request, "OPTIONS "); if (http_v != 2) http_v = 2; break;		//实测OPTIONS选项大部分情况返回302
+		case(3):	strcpy(request, "TRACE "); if (http_v != 2) http_v = 2;; break;			//实测TRACE选项大部分情况返回302
 	}
+	if (proxy_flag && http_v == 0)
+		http_v = 1;
 
 	//检测URL是否合法
 	if (strncasecmp(argv, "http://", 7) != 0) {
@@ -138,9 +185,14 @@ void Get_request(const char* argv) {
 		fprintf(stdout, "Hostname: %s\n", Hostname);
 	}
 	
-	//目前暂时不支持代理模式，因此仅需获取URL中的path路径
-	strcat(request, argv + index_path);			//请求行中的URL部分
-	strcat(request, " ");
+	if (!proxy_flag) {									//对于非代理模式仅需获取URL中的path路径
+		strcat(request, argv + index_path);			//请求行中的URL部分
+		strcat(request, " ");
+	}
+	else {						//代理模式下使用绝对路径
+		strcat(request, argv);
+		strcat(request, " ");
+	}
 
 	//目前只支持HTTP0.9,HTTP1.1
 	//请求行中的协议版本(注意结尾应为回车换行符)
@@ -164,6 +216,9 @@ void Get_request(const char* argv) {
 	//HTTP1.1默认长连接，须关闭
 	if(http_v==2)
 		strcat(request, "Connection: close\r\n");	//区分长连接短连接
+	if (proxy_flag) {
+		strcat(request, "Pragma:	no-cache\r\n");	//指定请求结果不缓存
+	}
 
 	strcat(request, "\r\n");			//注意HTTP请求的格式，请求头和请求数据间有一个空行，
 										//非常重要一定不能遗漏，缺失会造成问题。
@@ -175,6 +230,17 @@ int Get_clients() {
 	int fd[2];
 	pid_t pid;
 	FILE* f;
+
+	//首先判断到指定服务器的连接是否可用
+	int sockfd = 0;
+	if(proxy_flag)
+		sockfd = Socket(Proxyname, Hostport);
+	else
+		sockfd = Socket(Hostname, Hostport);
+	if (sockfd < 0) {
+		fprintf(stderr, "Error: can not connect to the server.\n");
+		return 2;
+	}
 
 	if (pipe(fd) != 0) {
 		fprintf(stderr, "Error: pipe failed\n");
@@ -191,7 +257,10 @@ int Get_clients() {
 		}
 	}
 	if (pid == 0) {		//子进程
-		Get_socket();			//发起连接
+		if (proxy_flag)						//发起连接
+			Get_socket(Proxyname);			
+		else
+			Get_socket(Hostname);
 		f = fdopen(fd[1], "w");
 		if (f == NULL) {
 			fprintf(stderr, "Error: read form pipe failed");
@@ -225,7 +294,7 @@ int Get_clients() {
 	}
 }
 
-void Get_socket() {
+void Get_socket(char* hostname) {
 	char response[1024];
 	struct sigaction sa;
 	sa.sa_handler = Alarm;
@@ -245,7 +314,7 @@ void Get_socket() {
 
 		//未超时对指定URL发起连接
 		int sockfd;
-		sockfd = Socket(Hostname, Hostport);
+		sockfd = Socket(hostname, Hostport);
 		if (sockfd < 0) {			//连接失败
 			++Failed;
 			continue;
@@ -276,6 +345,7 @@ void Get_socket() {
 			}
 			else {								//记录读取的字节数
 				bytes += temp_size;
+				//fprintf(stdout, "response: %s\n", response);
 			}
 		}
 	
